@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>HumanPosted — Web POC</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #161a22;
+    --panel-2: #1d2230;
+    --text: #e8ecf1;
+    --muted: #8b94a7;
+    --accent: #4ade80;
+    --warn: #f59e0b;
+    --bad: #ef4444;
+    --border: #262c3a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.45;
+  }
+  header {
+    padding: 24px 24px 8px; max-width: 880px; margin: 0 auto;
+  }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); font-size: 14px; }
+  main { max-width: 880px; margin: 0 auto; padding: 16px 24px 48px; }
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
+  .tab {
+    background: transparent; border: none; color: var(--muted);
+    padding: 10px 14px; font: inherit; cursor: pointer; border-bottom: 2px solid transparent;
+  }
+  .tab.active { color: var(--text); border-bottom-color: var(--accent); }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 16px; margin-bottom: 16px;
+  }
+  label { display: block; font-size: 13px; color: var(--muted); margin-bottom: 6px; }
+  textarea, input[type=text] {
+    width: 100%; background: var(--panel-2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 12px; font: inherit; resize: vertical;
+  }
+  textarea { min-height: 140px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; }
+  button.action {
+    background: var(--accent); color: #0b1a10; border: none; padding: 10px 14px;
+    border-radius: 8px; font-weight: 600; cursor: pointer; font: inherit;
+  }
+  button.action.secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); font-weight: 500; }
+  button.action:disabled { opacity: 0.5; cursor: not-allowed; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
+  .status { font-size: 13px; padding: 8px 12px; border-radius: 8px; margin-top: 12px; display: none; white-space: pre-wrap; }
+  .status.ok  { background: rgba(74,222,128,.12); color: var(--accent); display: block; border: 1px solid rgba(74,222,128,.3); }
+  .status.bad { background: rgba(239,68,68,.10); color: var(--bad); display: block; border: 1px solid rgba(239,68,68,.3); }
+  .status.warn{ background: rgba(245,158,11,.10); color: var(--warn); display: block; border: 1px solid rgba(245,158,11,.3); }
+  .status.info{ background: var(--panel-2); color: var(--muted); display: block; border: 1px solid var(--border); }
+  .key-line { font-family: ui-monospace, monospace; font-size: 12px; color: var(--muted); word-break: break-all; }
+  .notes { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .notes code { background: var(--panel-2); padding: 1px 5px; border-radius: 4px; }
+  details { margin-top: 12px; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  pre.proof {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; font-size: 12px; overflow-x: auto; margin: 8px 0 0;
+  }
+  .hide { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>HumanPosted — Web POC</h1>
+  <div class="sub">A minimal proof-of-concept that a human approved a piece of content, signed by a hardware-backed key via WebAuthn (Touch ID / Face ID / Windows Hello / security key).</div>
+</header>
+
+<main>
+  <div class="tabs">
+    <button class="tab active" data-tab="sign">Sign</button>
+    <button class="tab" data-tab="verify">Verify</button>
+    <button class="tab" data-tab="about">About</button>
+  </div>
+
+  <!-- SIGN -->
+  <section id="tab-sign">
+    <div class="panel">
+      <label>Step 1 — Register a device key (one-time per browser)</label>
+      <div class="row">
+        <button class="action" id="btn-register">Register this device</button>
+        <button class="action secondary" id="btn-forget">Forget key</button>
+        <span id="key-status" class="key-line">no key registered</span>
+      </div>
+      <div class="notes">Creates a hardware-backed WebAuthn credential bound to this origin. The private key never leaves your device. Signing later requires biometrics or device PIN.</div>
+    </div>
+
+    <div class="panel">
+      <label for="content">Step 2 — Write your post</label>
+      <textarea id="content" placeholder="AI-written content is fine. Fake automation is the problem."></textarea>
+      <div class="row">
+        <button class="action" id="btn-sign" disabled>Approve &amp; sign (biometric)</button>
+        <button class="action secondary" id="btn-copy" disabled>Copy signed post</button>
+      </div>
+      <div id="sign-status" class="status"></div>
+
+      <details id="signed-details" class="hide">
+        <summary>Signed post</summary>
+        <pre class="proof" id="signed-out"></pre>
+      </details>
+    </div>
+  </section>
+
+  <!-- VERIFY -->
+  <section id="tab-verify" class="hide">
+    <div class="panel">
+      <label for="verify-input">Paste a signed post</label>
+      <textarea id="verify-input" placeholder="Paste content including the &quot;Human-posted: HP1:...&quot; line"></textarea>
+      <div class="row">
+        <button class="action" id="btn-verify">Verify</button>
+      </div>
+      <div id="verify-status" class="status"></div>
+      <details id="verify-details" class="hide">
+        <summary>Proof internals</summary>
+        <pre class="proof" id="verify-out"></pre>
+      </details>
+    </div>
+  </section>
+
+  <!-- ABOUT -->
+  <section id="tab-about" class="hide">
+    <div class="panel">
+      <p><strong>What this proves.</strong> The exact content was approved on this device, by a human who passed a local user-verification challenge (biometric or PIN), and signed by a key produced inside the authenticator's secure hardware.</p>
+      <p><strong>What it does <em>not</em> prove.</strong> Authorship, originality, truth, or absence of AI assistance.</p>
+      <p><strong>Mechanics.</strong></p>
+      <ol>
+        <li>Registration creates an ES256 WebAuthn credential with <code>userVerification: "required"</code>.</li>
+        <li>To sign, the normalized SHA-256 of the content is used as the WebAuthn challenge. The authenticator returns <code>authenticatorData</code>, <code>clientDataJSON</code>, and <code>signature</code>.</li>
+        <li>The proof token is a binary blob — <code>1B version ‖ 65B raw EC point ‖ 2B adLen ‖ AD ‖ 2B cdLen ‖ CD ‖ 64B sig(r‖s)</code> — base64url-encoded. Typically ~430 characters.</li>
+        <li>Verification recomputes the content hash, checks it equals the challenge inside <code>clientDataJSON</code>, then verifies the ECDSA P-256 / SHA-256 signature over <code>authenticatorData ‖ SHA256(clientDataJSON)</code> using the embedded public key.</li>
+      </ol>
+      <p><strong>Self-contained tokens.</strong> For this POC, the public key travels inside the token — so any browser can verify without a registry. In a real deployment, you would resolve the credential id against a HumanPosted certificate service and reject keys without hardware-backed, user-verification attestation.</p>
+      <p><strong>Normalization.</strong> Before hashing, the proof line is stripped, line endings are normalized to <code>\n</code>, trailing whitespace per line is trimmed, and outer blank lines are removed.</p>
+    </div>
+  </section>
+</main>
+
+<script>
+// ---------- helpers ----------
+const $ = (id) => document.getElementById(id);
+const enc = new TextEncoder();
+const dec = new TextDecoder();
+
+function b64uEncode(bytes) {
+  const bin = String.fromCharCode(...new Uint8Array(bytes));
+  return btoa(bin).replaceAll('+','-').replaceAll('/','_').replace(/=+$/,'');
+}
+function b64uDecode(s) {
+  s = s.replaceAll('-','+').replaceAll('_','/');
+  while (s.length % 4) s += '=';
+  const bin = atob(s);
+  const out = new Uint8Array(bin.length);
+  for (let i=0;i<bin.length;i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+async function sha256(bytes) {
+  return new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+}
+function concatBytes(...arrs) {
+  let n = 0; for (const a of arrs) n += a.length;
+  const out = new Uint8Array(n);
+  let o = 0; for (const a of arrs) { out.set(a, o); o += a.length; }
+  return out;
+}
+
+// Normalization per spec
+function normalize(text) {
+  // remove any proof line and anything after it
+  let t = text.replace(/\r\n/g, '\n');
+  const idx = t.search(/^\s*Human-posted:\s*HP1:/m);
+  if (idx !== -1) t = t.slice(0, idx);
+  // trim trailing whitespace per line
+  t = t.split('\n').map(l => l.replace(/[ \t]+$/,'')).join('\n');
+  // trim leading/trailing blank lines
+  t = t.replace(/^\n+/, '').replace(/\n+$/, '');
+  return t;
+}
+
+// DER ECDSA signature -> WebCrypto raw r||s (P-256 = 64 bytes)
+function derToRaw(der) {
+  if (der[0] !== 0x30) throw new Error('bad DER signature');
+  let i = 2;
+  if (der[1] & 0x80) i += der[1] & 0x7f; // long-form length (rare here)
+  if (der[i] !== 0x02) throw new Error('bad DER r');
+  const rLen = der[i+1]; i += 2;
+  let r = der.slice(i, i + rLen); i += rLen;
+  if (der[i] !== 0x02) throw new Error('bad DER s');
+  const sLen = der[i+1]; i += 2;
+  let s = der.slice(i, i + sLen);
+  // strip leading zeros, then left-pad to 32
+  while (r.length > 32 && r[0] === 0) r = r.slice(1);
+  while (s.length > 32 && s[0] === 0) s = s.slice(1);
+  const out = new Uint8Array(64);
+  out.set(r, 32 - r.length);
+  out.set(s, 64 - s.length);
+  return out;
+}
+
+// ---------- key storage (browser-local, POC only) ----------
+const LS_KEY = 'humanposted.poc.v1';
+function loadKey()  { try { return JSON.parse(localStorage.getItem(LS_KEY) || 'null'); } catch { return null; } }
+function saveKey(k) { localStorage.setItem(LS_KEY, JSON.stringify(k)); }
+function clearKey() { localStorage.removeItem(LS_KEY); }
+
+function refreshKeyUi() {
+  const k = loadKey();
+  if (k) {
+    $('key-status').textContent = 'credential: ' + k.credIdB64u.slice(0, 16) + '…';
+    $('btn-sign').disabled = false;
+  } else {
+    $('key-status').textContent = 'no key registered';
+    $('btn-sign').disabled = true;
+  }
+}
+
+// ---------- registration ----------
+async function register() {
+  if (!('credentials' in navigator) || !window.PublicKeyCredential) {
+    return showStatus('sign-status','bad','WebAuthn is not available in this browser.');
+  }
+  showStatus('sign-status','info','Touch your authenticator…');
+  try {
+    const cred = await navigator.credentials.create({
+      publicKey: {
+        challenge: crypto.getRandomValues(new Uint8Array(32)),
+        rp: { name: 'HumanPosted POC' },
+        user: {
+          id: crypto.getRandomValues(new Uint8Array(16)),
+          name: 'local-user',
+          displayName: 'Local user',
+        },
+        pubKeyCredParams: [{ type: 'public-key', alg: -7 }], // ES256
+        authenticatorSelection: {
+          userVerification: 'required',
+          residentKey: 'preferred',
+        },
+        timeout: 60000,
+        attestation: 'none',
+      }
+    });
+    const resp = cred.response;
+    const spki = new Uint8Array(resp.getPublicKey());
+    const alg  = resp.getPublicKeyAlgorithm(); // expect -7
+    if (alg !== -7) throw new Error('unexpected algorithm: ' + alg);
+
+    const record = {
+      credIdB64u: b64uEncode(new Uint8Array(cred.rawId)),
+      pubKeyB64u: b64uEncode(spki),
+      alg,
+    };
+    saveKey(record);
+    refreshKeyUi();
+    showStatus('sign-status','ok','Device key registered. You can now sign content.');
+  } catch (e) {
+    showStatus('sign-status','bad','Registration failed: ' + e.message);
+  }
+}
+
+// ---------- signing ----------
+async function signContent() {
+  const k = loadKey();
+  if (!k) return;
+  const raw = $('content').value;
+  const normalized = normalize(raw);
+  if (!normalized) return showStatus('sign-status','warn','Content is empty.');
+  const contentHash = await sha256(enc.encode(normalized));
+
+  showStatus('sign-status','info','Approve with biometrics or PIN…');
+  try {
+    const assertion = await navigator.credentials.get({
+      publicKey: {
+        challenge: contentHash, // bind signature to content
+        allowCredentials: [{ id: b64uDecode(k.credIdB64u), type: 'public-key' }],
+        userVerification: 'required',
+        timeout: 60000,
+      }
+    });
+    const r = assertion.response;
+
+    // Pack the proof as a compact binary blob:
+    //   1B version | 65B raw EC P-256 point | 2B adLen | AD | 2B cdLen | CD | 64B sig(r||s)
+    const rawPoint = b64uDecode(k.pubKeyB64u).slice(26); // strip SPKI prefix for ES256
+    const ad  = new Uint8Array(r.authenticatorData);
+    const cd  = new Uint8Array(r.clientDataJSON);
+    const sig = derToRaw(new Uint8Array(r.signature));
+    const u16 = (n) => new Uint8Array([(n >> 8) & 0xff, n & 0xff]);
+    const packed = concatBytes(
+      new Uint8Array([0x01]), rawPoint, u16(ad.length), ad, u16(cd.length), cd, sig
+    );
+    const token = 'HP1:' + b64uEncode(packed);
+    const signedPost = normalized + '\n\nHuman-posted: ' + token;
+
+    $('signed-out').textContent = signedPost;
+    $('signed-details').classList.remove('hide');
+
+    // stash for copy button
+    $('btn-copy').dataset.value = signedPost;
+    $('btn-copy').disabled = false;
+
+    showStatus('sign-status','ok','Signed. Copy the post and paste it anywhere.');
+  } catch (e) {
+    showStatus('sign-status','bad','Signing failed: ' + e.message);
+  }
+}
+
+// ---------- verification ----------
+async function verify() {
+  const text = $('verify-input').value;
+  const m = text.match(/Human-posted:\s*HP1:([A-Za-z0-9_-]+)/);
+  if (!m) return showStatus('verify-status','bad','No HumanPosted token found.');
+
+  let rawPoint, ad, cd, sig;
+  try {
+    const p = b64uDecode(m[1]);
+    if (p[0] !== 0x01) throw new Error('unsupported proof version');
+    let o = 1;
+    rawPoint = p.slice(o, o += 65);
+    const adLen = (p[o] << 8) | p[o+1]; o += 2;
+    ad = p.slice(o, o += adLen);
+    const cdLen = (p[o] << 8) | p[o+1]; o += 2;
+    cd = p.slice(o, o += cdLen);
+    sig = p.slice(o, o += 64);
+    if (o !== p.length) throw new Error('trailing bytes in proof');
+  } catch (e) {
+    return showStatus('verify-status','bad','Malformed proof token: ' + e.message);
+  }
+
+  const normalized = normalize(text);
+  const contentHash = await sha256(enc.encode(normalized));
+
+  // parse clientDataJSON and check the challenge matches our content hash
+  let clientData;
+  try { clientData = JSON.parse(dec.decode(cd)); }
+  catch { return showStatus('verify-status','bad','Bad clientDataJSON.'); }
+  if (clientData.type !== 'webauthn.get') {
+    return showStatus('verify-status','bad','Wrong WebAuthn operation type.');
+  }
+  if (clientData.challenge !== b64uEncode(contentHash)) {
+    return showStatus('verify-status','bad','Content does not match signed hash (post was edited).');
+  }
+
+  // Verify ECDSA signature over authenticatorData || SHA256(clientDataJSON)
+  let pubKey;
+  try {
+    pubKey = await crypto.subtle.importKey(
+      'raw', rawPoint,
+      { name: 'ECDSA', namedCurve: 'P-256' },
+      false, ['verify']
+    );
+  } catch (e) {
+    return showStatus('verify-status','bad','Bad public key in proof.');
+  }
+  const cdHash = await sha256(cd);
+  const ok = await crypto.subtle.verify(
+    { name: 'ECDSA', hash: 'SHA-256' }, pubKey, sig, concatBytes(ad, cdHash)
+  );
+  if (!ok) return showStatus('verify-status','bad','Signature invalid.');
+
+  // Check user-verification flag in authenticatorData (byte 32, bit 2)
+  const flags = ad[32];
+  const userPresent  = !!(flags & 0x01);
+  const userVerified = !!(flags & 0x04);
+  if (!userPresent)  return showStatus('verify-status','bad','User-presence flag not set.');
+  if (!userVerified) return showStatus('verify-status','warn','VALID, but user-verification flag was not set — would not meet assurance level A3.');
+
+  $('verify-out').textContent = JSON.stringify({
+    rpIdHash: b64uEncode(ad.slice(0, 32)),
+    flags: '0x' + flags.toString(16).padStart(2, '0'),
+    userPresent, userVerified,
+    contentHash: 'sha256:' + Array.from(contentHash).map(b=>b.toString(16).padStart(2,'0')).join(''),
+    tokenChars: m[1].length,
+  }, null, 2);
+  $('verify-details').classList.remove('hide');
+
+  showStatus('verify-status','ok','VALID — this exact content was approved with local human verification.');
+}
+
+// ---------- ui plumbing ----------
+function showStatus(id, kind, msg) {
+  const el = $(id);
+  el.className = 'status ' + kind;
+  el.textContent = msg;
+}
+function selectTab(name) {
+  for (const t of document.querySelectorAll('.tab')) t.classList.toggle('active', t.dataset.tab === name);
+  for (const s of ['sign','verify','about']) $('tab-'+s).classList.toggle('hide', s !== name);
+}
+document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => selectTab(t.dataset.tab)));
+
+$('btn-register').addEventListener('click', register);
+$('btn-forget').addEventListener('click', () => { clearKey(); refreshKeyUi(); showStatus('sign-status','info','Forgot local key.'); });
+$('btn-sign').addEventListener('click', signContent);
+$('btn-copy').addEventListener('click', async () => {
+  const v = $('btn-copy').dataset.value || '';
+  try { await navigator.clipboard.writeText(v); showStatus('sign-status','ok','Copied signed post to clipboard.'); }
+  catch { showStatus('sign-status','warn','Could not write to clipboard — copy manually.'); }
+});
+$('btn-verify').addEventListener('click', verify);
+
+refreshKeyUi();
+</script>
+</body>
+</html>
