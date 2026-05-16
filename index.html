@@ -133,7 +133,7 @@
       <ol>
         <li>Registration creates an ES256 WebAuthn credential with <code>userVerification: "required"</code>.</li>
         <li>To sign, the normalized SHA-256 of the content is used as the WebAuthn challenge. The authenticator returns <code>authenticatorData</code>, <code>clientDataJSON</code>, and <code>signature</code>.</li>
-        <li>The proof token bundles credential id, public key (SPKI), authenticator data, client data, and signature, then base64url-encodes the package.</li>
+        <li>The proof token is a binary blob — <code>1B version ‖ 65B raw EC point ‖ 2B adLen ‖ AD ‖ 2B cdLen ‖ CD ‖ 64B sig(r‖s)</code> — base64url-encoded. Typically ~430 characters.</li>
         <li>Verification recomputes the content hash, checks it equals the challenge inside <code>clientDataJSON</code>, then verifies the ECDSA P-256 / SHA-256 signature over <code>authenticatorData ‖ SHA256(clientDataJSON)</code> using the embedded public key.</li>
       </ol>
       <p><strong>Self-contained tokens.</strong> For this POC, the public key travels inside the token — so any browser can verify without a registry. In a real deployment, you would resolve the credential id against a HumanPosted certificate service and reject keys without hardware-backed, user-verification attestation.</p>
@@ -284,15 +284,17 @@ async function signContent() {
     });
     const r = assertion.response;
 
-    const proof = {
-      v: 1,
-      cred: k.credIdB64u,
-      pk:   k.pubKeyB64u,
-      ad:   b64uEncode(new Uint8Array(r.authenticatorData)),
-      cd:   b64uEncode(new Uint8Array(r.clientDataJSON)),
-      sig:  b64uEncode(new Uint8Array(r.signature)),
-    };
-    const token = 'HP1:' + b64uEncode(enc.encode(JSON.stringify(proof)));
+    // Pack the proof as a compact binary blob:
+    //   1B version | 65B raw EC P-256 point | 2B adLen | AD | 2B cdLen | CD | 64B sig(r||s)
+    const rawPoint = b64uDecode(k.pubKeyB64u).slice(26); // strip SPKI prefix for ES256
+    const ad  = new Uint8Array(r.authenticatorData);
+    const cd  = new Uint8Array(r.clientDataJSON);
+    const sig = derToRaw(new Uint8Array(r.signature));
+    const u16 = (n) => new Uint8Array([(n >> 8) & 0xff, n & 0xff]);
+    const packed = concatBytes(
+      new Uint8Array([0x01]), rawPoint, u16(ad.length), ad, u16(cd.length), cd, sig
+    );
+    const token = 'HP1:' + b64uEncode(packed);
     const signedPost = normalized + '\n\nHuman-posted: ' + token;
 
     $('signed-out').textContent = signedPost;
@@ -313,22 +315,34 @@ async function verify() {
   const text = $('verify-input').value;
   const m = text.match(/Human-posted:\s*HP1:([A-Za-z0-9_-]+)/);
   if (!m) return showStatus('verify-status','bad','No HumanPosted token found.');
-  let proof;
-  try { proof = JSON.parse(dec.decode(b64uDecode(m[1]))); }
-  catch (e) { return showStatus('verify-status','bad','Malformed proof token.'); }
+
+  let rawPoint, ad, cd, sig;
+  try {
+    const p = b64uDecode(m[1]);
+    if (p[0] !== 0x01) throw new Error('unsupported proof version');
+    let o = 1;
+    rawPoint = p.slice(o, o += 65);
+    const adLen = (p[o] << 8) | p[o+1]; o += 2;
+    ad = p.slice(o, o += adLen);
+    const cdLen = (p[o] << 8) | p[o+1]; o += 2;
+    cd = p.slice(o, o += cdLen);
+    sig = p.slice(o, o += 64);
+    if (o !== p.length) throw new Error('trailing bytes in proof');
+  } catch (e) {
+    return showStatus('verify-status','bad','Malformed proof token: ' + e.message);
+  }
 
   const normalized = normalize(text);
   const contentHash = await sha256(enc.encode(normalized));
 
   // parse clientDataJSON and check the challenge matches our content hash
   let clientData;
-  try { clientData = JSON.parse(dec.decode(b64uDecode(proof.cd))); }
+  try { clientData = JSON.parse(dec.decode(cd)); }
   catch { return showStatus('verify-status','bad','Bad clientDataJSON.'); }
   if (clientData.type !== 'webauthn.get') {
     return showStatus('verify-status','bad','Wrong WebAuthn operation type.');
   }
-  const expected = b64uEncode(contentHash);
-  if (clientData.challenge !== expected) {
+  if (clientData.challenge !== b64uEncode(contentHash)) {
     return showStatus('verify-status','bad','Content does not match signed hash (post was edited).');
   }
 
@@ -336,19 +350,16 @@ async function verify() {
   let pubKey;
   try {
     pubKey = await crypto.subtle.importKey(
-      'spki', b64uDecode(proof.pk),
+      'raw', rawPoint,
       { name: 'ECDSA', namedCurve: 'P-256' },
       false, ['verify']
     );
   } catch (e) {
     return showStatus('verify-status','bad','Bad public key in proof.');
   }
-  const ad = b64uDecode(proof.ad);
-  const cdHash = await sha256(b64uDecode(proof.cd));
-  const signed = concatBytes(ad, cdHash);
-  const sigRaw = derToRaw(b64uDecode(proof.sig));
+  const cdHash = await sha256(cd);
   const ok = await crypto.subtle.verify(
-    { name: 'ECDSA', hash: 'SHA-256' }, pubKey, sigRaw, signed
+    { name: 'ECDSA', hash: 'SHA-256' }, pubKey, sig, concatBytes(ad, cdHash)
   );
   if (!ok) return showStatus('verify-status','bad','Signature invalid.');
 
@@ -360,11 +371,11 @@ async function verify() {
   if (!userVerified) return showStatus('verify-status','warn','VALID, but user-verification flag was not set — would not meet assurance level A3.');
 
   $('verify-out').textContent = JSON.stringify({
-    credential: proof.cred,
     rpIdHash: b64uEncode(ad.slice(0, 32)),
     flags: '0x' + flags.toString(16).padStart(2, '0'),
     userPresent, userVerified,
     contentHash: 'sha256:' + Array.from(contentHash).map(b=>b.toString(16).padStart(2,'0')).join(''),
+    tokenChars: m[1].length,
   }, null, 2);
   $('verify-details').classList.remove('hide');
 
